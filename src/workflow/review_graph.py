@@ -4,6 +4,7 @@ from typing import TypedDict, List, Annotated
 from langgraph.graph import StateGraph, END
 from src.models import FileDiff, Anchor, RuleChunk, Finding
 from src.bitbucket.diff_fetcher import DiffFetcher
+from src.bitbucket.file_fetcher import FileFetcher
 from src.analysis.anchor_detector import AnchorDetector
 from src.retrieval.retriever import Retriever
 from src.review.prompt_builder import PromptBuilder
@@ -16,6 +17,7 @@ from src.logger import logger
 class ReviewState(TypedDict):
     """State for the review workflow."""
     pr_id: int
+    source_commit: str
     file_diffs: List[FileDiff]
     anchors: List[Anchor]
     anchor_tags: List[str]
@@ -33,6 +35,7 @@ class ReviewWorkflow:
     def __init__(self):
         """Initialize the review workflow."""
         self.diff_fetcher = DiffFetcher()
+        self.file_fetcher = FileFetcher()
         self.anchor_detector = AnchorDetector()
         self.retriever = Retriever()
         self.prompt_builder = PromptBuilder()
@@ -59,6 +62,7 @@ class ReviewWorkflow:
         workflow.add_node("build_prompt", self._build_prompt)
         workflow.add_node("generate_review", self._generate_review)
         workflow.add_node("parse_response", self._parse_response)
+        workflow.add_node("verify_findings", self._verify_findings)
         workflow.add_node("post_comments", self._post_comments)
         
         # Define edges
@@ -68,7 +72,8 @@ class ReviewWorkflow:
         workflow.add_edge("retrieve_rules", "build_prompt")
         workflow.add_edge("build_prompt", "generate_review")
         workflow.add_edge("generate_review", "parse_response")
-        workflow.add_edge("parse_response", "post_comments")
+        workflow.add_edge("parse_response", "verify_findings")
+        workflow.add_edge("verify_findings", "post_comments")
         workflow.add_edge("post_comments", END)
         
         return workflow.compile()
@@ -86,6 +91,8 @@ class ReviewWorkflow:
         
         try:
             file_diffs = await self.diff_fetcher.fetch_pr_diff(state['pr_id'])
+            pr_metadata = await self.diff_fetcher.get_pr_metadata(state['pr_id'])
+            state['source_commit'] = pr_metadata['source']['commit']['hash']
             state['file_diffs'] = file_diffs
             state['status'] = 'diff_fetched'
         except Exception as e:
@@ -223,6 +230,80 @@ class ReviewWorkflow:
         
         return state
     
+        return state
+    
+    async def _verify_findings(self, state: ReviewState) -> ReviewState:
+        """Verify findings against actual file content.
+        
+        Args:
+            state: Current workflow state
+            
+        Returns:
+            Updated state
+        """
+        logger.info("Verifying findings")
+        
+        try:
+            verified_findings = []
+            
+            # Group findings by file to minimize API calls
+            findings_by_file = {}
+            for finding in state['findings']:
+                if finding.file not in findings_by_file:
+                    findings_by_file[finding.file] = []
+                findings_by_file[finding.file].append(finding)
+            
+            for file_path, findings in findings_by_file.items():
+                # Fetch file content
+                content = await self.file_fetcher.fetch_file_content(file_path, state['source_commit'])
+                if not content:
+                    logger.warning(f"Could not fetch content for {file_path}, skipping verification")
+                    verified_findings.extend(findings)
+                    continue
+                
+                lines = content.split('\n')
+                
+                for finding in findings:
+                    if not finding.code_snippet:
+                        # No snippet to verify, keep original line
+                        verified_findings.append(finding)
+                        continue
+                    
+                    # Search for snippet in file
+                    found_line = -1
+                    snippet = finding.code_snippet.strip()
+                    
+                    # First check if the original line matches
+                    if finding.line and 0 <= finding.line - 1 < len(lines):
+                        if snippet in lines[finding.line - 1]:
+                            found_line = finding.line
+                    
+                    # If not found at expected line, search the whole file
+                    if found_line == -1:
+                        for i, line in enumerate(lines):
+                            if snippet in line:
+                                found_line = i + 1
+                                logger.info(f"Corrected line for {file_path}: {finding.line} -> {found_line}")
+                                break
+                    
+                    if found_line != -1:
+                        finding.line = found_line
+                        verified_findings.append(finding)
+                    else:
+                        logger.warning(f"Could not verify snippet '{snippet}' in {file_path}")
+                        # Keep finding but maybe mark as unverified? For now just keep it.
+                        verified_findings.append(finding)
+            
+            state['findings'] = verified_findings
+            state['status'] = 'findings_verified'
+            
+        except Exception as e:
+            logger.error(f"Error verifying findings: {e}")
+            # Don't fail the whole workflow, just proceed with unverified findings
+            state['status'] = 'verification_failed'
+        
+        return state
+
     async def _post_comments(self, state: ReviewState) -> ReviewState:
         """Post review comments to Bitbucket.
         
@@ -263,6 +344,7 @@ class ReviewWorkflow:
         # Initialize state
         initial_state: ReviewState = {
             'pr_id': pr_id,
+            'source_commit': '',
             'file_diffs': [],
             'anchors': [],
             'anchor_tags': [],

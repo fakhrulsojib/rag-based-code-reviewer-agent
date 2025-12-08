@@ -31,6 +31,7 @@ Use these explicit line numbers for your findings.
 Return a JSON array of findings. Each finding must have:
 - file: relative file path
 - line: line number (integer) from the provided diff
+- code_snippet: the exact line of code identified (string)
 - severity: "High", "Medium", or "Low"
 - rule: brief description of the violated rule
 - suggestion: specific, actionable suggestion for fixing the issue

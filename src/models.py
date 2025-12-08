@@ -59,6 +59,7 @@ class Finding(BaseModel):
     
     file: str = Field(description="File path relative to repo root")
     line: Optional[int] = Field(default=None, description="Line number")
+    code_snippet: Optional[str] = Field(default=None, description="The exact line of code identified")
     severity: Literal["High", "Medium", "Low"] = Field(description="Severity level")
     rule: str = Field(description="Rule that was violated")
     suggestion: str = Field(description="Suggested fix or improvement")
@@ -69,6 +70,7 @@ class Finding(BaseModel):
             "example": {
                 "file": "src/entities/User.java",
                 "line": 15,
+                "code_snippet": "public class User {",
                 "severity": "High",
                 "rule": "Missing serialVersionUID",
                 "suggestion": "Add: private static final long serialVersionUID = 1L;",
