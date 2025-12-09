@@ -31,7 +31,7 @@ class Embedder:
         
         Args:
             texts: List of text strings to embed
-            
+        
         Returns:
             List of embedding vectors
         """
@@ -40,19 +40,19 @@ class Embedder:
         
         logger.info(f"Generating embeddings for {len(texts)} texts")
         
-        embeddings = []
-        
-        # Process in batches to avoid rate limits
+        embeddings: List[List[float]] = []
         batch_size = 100
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i + batch_size]
-            
             try:
-                batch_embeddings = self._embed_batch(batch)
+                if self.provider == "ollama":
+                    # OllamaEmbeddings provides embed_documents directly
+                    batch_embeddings = self.model.embed_documents(batch)
+                else:
+                    batch_embeddings = self._embed_batch(batch)
                 embeddings.extend(batch_embeddings)
             except Exception as e:
                 logger.error(f"Error generating embeddings for batch {i}: {e}")
-                # Return zero vectors for failed batch
                 embeddings.extend([[0.0] * 768 for _ in batch])
         
         logger.info(f"Generated {len(embeddings)} embeddings")

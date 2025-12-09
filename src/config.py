@@ -47,8 +47,8 @@ class Settings(BaseSettings):
     vector_store_type: Literal["chromadb", "faiss"] = Field(default="chromadb")
     chroma_persist_dir: str = Field(default="./vector_store")
     embedding_model: str = Field(
-        default="models/embedding-001",
-        description="Gemini embedding model"
+        default="nomic-embed-text",
+        description="Embedding model name"
     )
     
     # Application Configuration
