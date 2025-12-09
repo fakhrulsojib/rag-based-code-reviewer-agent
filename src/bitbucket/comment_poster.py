@@ -42,19 +42,6 @@ class CommentPoster:
         
         logger.info(f"Posted {posted_count}/{len(findings)} inline comments")
         
-        # Post summary comment if there are findings
-        if findings:
-            try:
-                # Note: The original post_summary_comment signature is (pr_id, findings_count, processing_time).
-                # This call assumes a modified or new _post_summary_comment method.
-                # For this change, we'll call the existing method with adapted arguments.
-                # If the user intends a new _post_summary_comment, that definition would be needed.
-                # For now, we'll call the existing public method.
-                await self.post_summary_comment(pr_id, len(findings), 0.0) # Placeholder for processing_time
-                logger.info("Posted summary comment")
-            except Exception as e:
-                logger.error(f"Failed to post summary comment: {e}")
-        
         return posted_count
     
     async def _post_inline_comment(
@@ -70,19 +57,8 @@ class CommentPoster:
             pr_id: Pull request ID
             finding: Code review finding
         """
-        severity_emoji = {
-            "High": "🔴",
-            "Medium": "🟡",
-            "Low": "🔵"
-        }
-        
-        emoji = severity_emoji.get(finding.severity, "ℹ️")
-        
-        comment_text = f"""{emoji} **{finding.severity}**: {finding.rule}
-
-{finding.suggestion}
-
-*Category: {finding.category}*"""
+        # Simplified comment format: just the suggestion
+        comment_text = finding.suggestion
         
         # Bitbucket API endpoint for inline comments
         comment_url = f"{self.base_url}/repositories/{self.workspace}/{self.repo_slug}/pullrequests/{pr_id}/comments"
@@ -122,63 +98,6 @@ class CommentPoster:
         Returns:
             Formatted comment string
         """
-        # Severity emoji
-        severity_emoji = {
-            "High": "🔴",
-            "Medium": "🟡",
-            "Low": "🔵"
-        }
-        
-        emoji = severity_emoji.get(finding.severity, "ℹ️")
-        
-        # Build comment
-        lines = [
-            f"{emoji} **{finding.severity}**: {finding.rule}",
-            "",
-            finding.suggestion
-        ]
-        
-        if finding.category:
-            lines.append("")
-            lines.append(f"*Category: {finding.category}*")
-        
-        return "\n".join(lines)
+        return finding.suggestion
     
-    async def post_summary_comment(
-        self,
-        pr_id: int,
-        findings_count: int,
-        processing_time: float
-    ):
-        """Post a summary comment to the PR.
-        
-        Args:
-            pr_id: Pull request ID
-            findings_count: Number of findings
-            processing_time: Processing time in seconds
-        """
-        comment_url = f"{self.base_url}/repositories/{self.workspace}/{self.repo_slug}/pullrequests/{pr_id}/comments"
-        
-        # Format summary
-        if findings_count == 0:
-            summary = "✅ **Code Review Complete**\n\nNo issues found. Great work!"
-        else:
-            summary = f"📋 **Code Review Complete**\n\n"
-            summary += f"Found {findings_count} issue(s) that need attention.\n"
-            summary += f"Review completed in {processing_time:.1f}s."
-        
-        payload = {
-            "content": {
-                "raw": summary
-            }
-        }
-        
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            response = await client.post(
-                comment_url,
-                json=payload,
-                auth=self.auth
-            )
-            response.raise_for_status()
-        
-        logger.info(f"Posted summary comment to PR #{pr_id}")
+

@@ -72,6 +72,7 @@ class Settings(BaseSettings):
     max_retries: int = Field(default=3, ge=1, description="Max LLM API retries")
     retry_delay: int = Field(default=2, ge=1, description="Retry delay in seconds")
     review_timeout: int = Field(default=120, ge=10, description="Review timeout in seconds")
+    force_use_all_rules: bool = Field(default=False, description="Whether to include all rules in the prompt")
     
     class Config:
         env_file = ".env"

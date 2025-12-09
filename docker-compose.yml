@@ -9,6 +9,7 @@ services:
       - ./rules:/app/rules:ro
       - ./vector_store:/app/vector_store
       - ./logs:/app/logs
+      - ./reports:/app/reports
       - ./.env:/app/.env:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"

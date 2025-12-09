@@ -76,6 +76,15 @@ class Retriever:
         
         return final_chunks
     
+    def retrieve_all_rules(self) -> List[RuleChunk]:
+        """Retrieve all rules from the vector store.
+        
+        Returns:
+            List of RuleChunk objects
+        """
+        logger.info("Retrieving all rules (bypassing similarity search)")
+        return self.vector_store.get_all_chunks()
+    
     def _deduplicate_chunks(self, chunks: List[RuleChunk]) -> List[RuleChunk]:
         """Remove duplicate or highly similar chunks.
         

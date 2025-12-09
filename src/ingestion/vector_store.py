@@ -150,6 +150,37 @@ class VectorStore:
         logger.info(f"Found {len(rule_chunks)} matching chunks")
         return rule_chunks
     
+    def get_all_chunks(self) -> List[RuleChunk]:
+        """Retrieve all chunks from the vector store.
+        
+        Returns:
+            List of RuleChunk objects (relevance_score=1.0)
+        """
+        logger.info("Retrieving all chunks from vector store")
+        
+        # Get all documents from collection
+        results = self.collection.get()
+        
+        rule_chunks = []
+        
+        if results['ids']:
+            for i in range(len(results['ids'])):
+                # Handle potential None values in metadata
+                metadata = results['metadatas'][i] if results['metadatas'] and results['metadatas'][i] else {}
+                
+                chunk = Chunk(
+                    chunk_id=results['ids'][i],
+                    content=results['documents'][i],
+                    metadata=metadata,
+                    source_file=metadata.get('source_file', '')
+                )
+                
+                # Set relevance score to 1.0 since we're explicitly requesting all
+                rule_chunks.append(RuleChunk(chunk=chunk, relevance_score=1.0))
+                
+        logger.info(f"Retrieved {len(rule_chunks)} chunks")
+        return rule_chunks
+    
     def delete_by_source(self, source_file: str):
         """Delete all chunks from a specific source file.
         

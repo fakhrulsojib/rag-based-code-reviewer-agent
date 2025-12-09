@@ -50,3 +50,6 @@ htmlcov/
 
 # Docker
 .dockerignore
+
+# Local reports
+reports/

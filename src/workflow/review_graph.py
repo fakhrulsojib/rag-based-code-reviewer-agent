@@ -11,6 +11,9 @@ from src.review.prompt_builder import PromptBuilder
 from src.review.llm_client import LLMClient
 from src.review.response_parser import ResponseParser
 from src.bitbucket.comment_poster import CommentPoster
+from src.workflow.partitioner import DiffPartitioner
+from src.workflow.reporter import ReviewReporter
+from src.config import settings
 from src.logger import logger
 
 
@@ -42,6 +45,8 @@ class ReviewWorkflow:
         self.llm_client = LLMClient()
         self.response_parser = ResponseParser()
         self.comment_poster = CommentPoster()
+        self.partitioner = DiffPartitioner()
+        self.reporter = ReviewReporter()
         
         # Build the workflow graph
         self.graph = self._build_graph()
@@ -56,7 +61,6 @@ class ReviewWorkflow:
         workflow = StateGraph(ReviewState)
         
         # Add nodes
-        workflow.add_node("fetch_diff", self._fetch_diff)
         workflow.add_node("detect_anchors", self._detect_anchors)
         workflow.add_node("retrieve_rules", self._retrieve_rules)
         workflow.add_node("build_prompt", self._build_prompt)
@@ -66,8 +70,7 @@ class ReviewWorkflow:
         workflow.add_node("post_comments", self._post_comments)
         
         # Define edges
-        workflow.set_entry_point("fetch_diff")
-        workflow.add_edge("fetch_diff", "detect_anchors")
+        workflow.set_entry_point("detect_anchors")
         workflow.add_edge("detect_anchors", "retrieve_rules")
         workflow.add_edge("retrieve_rules", "build_prompt")
         workflow.add_edge("build_prompt", "generate_review")
@@ -77,30 +80,6 @@ class ReviewWorkflow:
         workflow.add_edge("post_comments", END)
         
         return workflow.compile()
-    
-    async def _fetch_diff(self, state: ReviewState) -> ReviewState:
-        """Fetch PR diff from Bitbucket.
-        
-        Args:
-            state: Current workflow state
-            
-        Returns:
-            Updated state
-        """
-        logger.info(f"Fetching diff for PR #{state['pr_id']}")
-        
-        try:
-            file_diffs = await self.diff_fetcher.fetch_pr_diff(state['pr_id'])
-            pr_metadata = await self.diff_fetcher.get_pr_metadata(state['pr_id'])
-            state['source_commit'] = pr_metadata['source']['commit']['hash']
-            state['file_diffs'] = file_diffs
-            state['status'] = 'diff_fetched'
-        except Exception as e:
-            logger.error(f"Error fetching diff: {e}")
-            state['error'] = str(e)
-            state['status'] = 'error'
-        
-        return state
     
     async def _detect_anchors(self, state: ReviewState) -> ReviewState:
         """Detect anchors in file diffs.
@@ -117,7 +96,7 @@ class ReviewWorkflow:
             all_anchors = []
             
             for file_diff in state['file_diffs']:
-                anchors = self.anchor_detector.detect_anchors(file_diff)
+                anchors = await self.anchor_detector.detect_anchors(file_diff)
                 all_anchors.extend(anchors)
             
             # Get unique anchor tags
@@ -145,7 +124,11 @@ class ReviewWorkflow:
         logger.info("Retrieving rules")
         
         try:
-            if not state['anchor_tags']:
+
+            if settings.force_use_all_rules:
+                logger.info("Force use all rules enabled, retrieving all rules")
+                state['rule_chunks'] = self.retriever.retrieve_all_rules()
+            elif not state['anchor_tags']:
                 logger.warning("No anchors detected, skipping rule retrieval")
                 state['rule_chunks'] = []
             else:
@@ -228,8 +211,6 @@ class ReviewWorkflow:
             state['error'] = str(e)
             state['status'] = 'error'
         
-        return state
-    
         return state
     
     async def _verify_findings(self, state: ReviewState) -> ReviewState:
@@ -331,18 +312,17 @@ class ReviewWorkflow:
         return state
     
     async def run(self, pr_id: int) -> ReviewState:
-        """Run the complete review workflow.
+        """Run the complete review workflow with partitioning.
         
         Args:
             pr_id: Pull request ID
             
         Returns:
-            Final workflow state
+            Final workflow state (aggregated)
         """
         logger.info(f"Starting review workflow for PR #{pr_id}")
         
-        # Initialize state
-        initial_state: ReviewState = {
+        final_state: ReviewState = {
             'pr_id': pr_id,
             'source_commit': '',
             'file_diffs': [],
@@ -356,8 +336,71 @@ class ReviewWorkflow:
             'error': ''
         }
         
-        # Run the workflow
-        final_state = await self.graph.ainvoke(initial_state)
+        try:
+            # 1. Fetch Diff
+            file_diffs = await self.diff_fetcher.fetch_pr_diff(pr_id)
+            pr_metadata = await self.diff_fetcher.get_pr_metadata(pr_id)
+            final_state['source_commit'] = pr_metadata['source']['commit']['hash']
+            final_state['file_diffs'] = file_diffs
+            
+            # 2. Partition Diff
+            chunks = self.partitioner.partition_diffs(file_diffs)
+            
+            # 3. Create Report Directory
+            report_dir = self.reporter.create_report_dir(pr_id)
+            
+            all_findings = []
+            
+            # 4. Process Chunks
+            for i, chunk in enumerate(chunks):
+                logger.info(f"Processing chunk {i+1}/{len(chunks)}")
+                
+                # Report: Save diffs
+                self.reporter.save_chunk_data(report_dir, i, chunk)
+                
+                # Initialize chunk state
+                chunk_state: ReviewState = {
+                    'pr_id': pr_id,
+                    'source_commit': final_state['source_commit'],
+                    'file_diffs': chunk,
+                    'anchors': [],
+                    'anchor_tags': [],
+                    'rule_chunks': [],
+                    'prompt': '',
+                    'llm_response': '',
+                    'findings': [],
+                    'status': 'started',
+                    'error': ''
+                }
+                
+                # Run graph for this chunk
+                result_state = await self.graph.ainvoke(chunk_state)
+                
+                # Report: Save artifacts
+                self.reporter.save_anchors(report_dir, i, result_state.get('anchors', []))
+                self.reporter.save_rules(report_dir, i, result_state.get('rule_chunks', []))
+                self.reporter.save_prompt(report_dir, i, result_state.get('prompt', ''))
+                self.reporter.save_response(
+                    report_dir, 
+                    i, 
+                    result_state.get('llm_response', ''),
+                    result_state.get('findings', [])
+                )
+                self.reporter.save_comments(report_dir, i, result_state.get('findings', []))
+                
+                if result_state.get('error'):
+                    logger.error(f"Error processing chunk {i}: {result_state['error']}")
+                    final_state['error'] += f"Chunk {i} error: {result_state['error']}; "
+                
+                if result_state.get('findings'):
+                    all_findings.extend(result_state['findings'])
+            
+            final_state['findings'] = all_findings
+            final_state['status'] = 'complete' if not final_state['error'] else 'partial_error'
+            
+        except Exception as e:
+            logger.error(f"Workflow execution failed: {e}")
+            final_state['error'] = str(e)
+            final_state['status'] = 'error'
         
-        logger.info(f"Review workflow completed with status: {final_state['status']}")
         return final_state
