@@ -4,6 +4,7 @@ import re
 from typing import List
 from src.models import Finding
 from src.logger import logger
+import json_repair
 
 
 class ResponseParser:
@@ -20,19 +21,25 @@ class ResponseParser:
         """
         logger.info("Parsing LLM response")
         
-        # Extract JSON from response
-        json_str = self._extract_json(response)
-        
-        if not json_str:
-            logger.warning("No JSON found in response")
-            return []
-        
         try:
-            # Parse JSON
-            findings_data = json.loads(json_str)
+            # Clean JSON before parsing using regex to handle unescaped quotes
+            cleaned_response = self._clean_json(response)
+            
+            # Use json_repair to parse and fix JSON from the response
+            # return_objects=True returns the parsed object instead of a string
+            findings_data = json_repair.repair_json(cleaned_response, return_objects=True)
+            
+            # If nothing was parsed or it returned None
+            if not findings_data:
+                logger.warning("No JSON found or parsed from response")
+                return []
+            
+            # Handle case where it might parse a single dictionary instead of a list
+            if isinstance(findings_data, dict):
+                findings_data = [findings_data]
             
             if not isinstance(findings_data, list):
-                logger.error("Response is not a JSON array")
+                logger.error(f"Parsed data is not a list: {type(findings_data)}")
                 return []
             
             # Convert to Finding objects
@@ -48,38 +55,45 @@ class ResponseParser:
             logger.info(f"Parsed {len(findings)} findings from response")
             return findings
             
-        except json.JSONDecodeError as e:
-            logger.error(f"Error decoding JSON: {e}")
+        except Exception as e:
+            logger.error(f"Error parsing/repairing JSON: {e}")
             return []
     
-    def _extract_json(self, text: str) -> str:
-        """Extract JSON array from text.
+    def _clean_json(self, text: str) -> str:
+        """Clean JSON string by fixing common LLM formatting issues.
         
         Args:
-            text: Text containing JSON
+            text: Raw JSON string
             
         Returns:
-            JSON string or empty string if not found
+            Cleaned JSON string
         """
-        # Try to find JSON array in markdown code blocks
-        code_block_pattern = r'```(?:json)?\s*(\[.*?\])\s*```'
-        match = re.search(code_block_pattern, text, re.DOTALL)
+        # Pattern to find code_snippet value and the following severity field
+        # We look for "code_snippet": " ... ", "severity"
+        # capturing the content inside the quotes.
+        pattern = r'("code_snippet"\s*:\s*")(.*?)("\s*,\s*"severity")'
         
-        if match:
-            return match.group(1)
-        
-        # Try to find JSON array directly
-        array_pattern = r'\[\s*\{.*?\}\s*\]'
-        match = re.search(array_pattern, text, re.DOTALL)
-        
-        if match:
-            return match.group(0)
-        
-        # Try to find empty array
-        if '[]' in text:
-            return '[]'
-        
-        return ''
+        def replace_match(match):
+            prefix = match.group(0)
+            start_quote = match.group(1)
+            content = match.group(2)
+            end_suffix = match.group(3)
+            
+            # Escape quotes inside content that aren't already escaped
+            # Using regex lookbehind to find " not preceded by \
+            cleaned_content = re.sub(r'(?<!\\)"', r'\\"', content)
+            
+            # Escape newlines
+            cleaned_content = cleaned_content.replace('\n', '\\n')
+            
+            return f'{start_quote}{cleaned_content}{end_suffix}'
+
+        # Apply replacement
+        try:
+            return re.sub(pattern, replace_match, text, flags=re.DOTALL)
+        except Exception as e:
+            logger.warning(f"Error extracting/cleaning code snippets: {e}")
+            return text
     
     def validate_findings(self, findings: List[Finding]) -> List[Finding]:
         """Validate and filter findings.
@@ -102,7 +116,7 @@ class ResponseParser:
             if finding.severity not in ['High', 'Medium', 'Low']:
                 logger.warning(f"Invalid severity '{finding.severity}', defaulting to Medium")
                 finding.severity = 'Medium'
-            
+                           
             validated.append(finding)
         
         logger.info(f"Validated {len(validated)}/{len(findings)} findings")

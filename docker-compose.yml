@@ -10,6 +10,7 @@ services:
       - ./vector_store:/app/vector_store
       - ./logs:/app/logs
       - ./reports:/app/reports
+      - ./src:/app/src
       - ./.env:/app/.env:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"

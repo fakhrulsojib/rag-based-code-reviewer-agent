@@ -91,7 +91,13 @@ class DiffFetcher:
                 # Format: a/path/to/file b/path/to/file
                 parts = header.split()
                 if len(parts) >= 2:
-                    file_path = parts[1].lstrip('b/')
+                    raw_path = parts[1]
+                    # Fix: lstrip('b/') strips any characters in the set ['b', '/']
+                    # We only want to remove the 'b/' prefix if it exists
+                    if raw_path.startswith('b/'):
+                        file_path = raw_path[2:]
+                    else:
+                        file_path = raw_path
                     
                     # Get diffstat info
                     stat_info = diffstat_map.get(file_path, {})
