@@ -34,7 +34,7 @@ class Settings(BaseSettings):
         description="Gemini model to use"
     )
     gemini_temperature: float = Field(default=0.3, ge=0.0, le=2.0)
-    gemini_max_tokens: int = Field(default=8192, ge=1)
+    gemini_max_tokens: int = Field(default=15000, ge=1)
     
     # Bitbucket Configuration
     bitbucket_workspace: str = Field(default="", description="Bitbucket workspace")

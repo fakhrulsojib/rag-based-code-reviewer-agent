@@ -1,5 +1,6 @@
 """Dynamic prompt builder for LLM code reviews."""
 from typing import List
+import datetime
 from src.models import RuleChunk, FileDiff
 from src.logger import logger
 
@@ -7,7 +8,9 @@ from src.logger import logger
 class PromptBuilder:
     """Builds dynamic prompts for LLM code reviews."""
     
-    SYSTEM_PROMPT = """You are a senior code reviewer with deep expertise in software engineering best practices.
+    SYSTEM_PROMPT_TEMPLATE = """You are a senior code reviewer with deep expertise in software engineering best practices.
+
+Today is {current_date}. Keep this date in memory for any time-sensitive contexts.
 
 Your role is to review code changes and provide constructive feedback based ONLY on the specific rules provided to you.
 
@@ -16,6 +19,7 @@ Your role is to review code changes and provide constructive feedback based ONLY
 2. Do not invent or assume rules that are not provided
 3. Be professional and concise - no lecturing or condescending tone
 4. Focus on actionable feedback
+5. Chain of Thought: Before making a suggestion, silently reason whether the rule *strictly* applies to the specific code change. If uncertain, do not comment.
 
 **Severity Levels:**
 - **High**: Critical issues that must be fixed (security, data integrity, breaking changes)
@@ -62,8 +66,14 @@ If no issues are found, return an empty array: []
         # Build input section with diffs
         input_section = self._build_input(file_diffs)
         
+        # Get current date
+        current_date_str = datetime.date.today().strftime("%Y-%m-%d")
+        
+        # Format system prompt
+        system_prompt = self.SYSTEM_PROMPT_TEMPLATE.format(current_date=current_date_str)
+        
         # Combine into full prompt
-        prompt = f"""{self.SYSTEM_PROMPT}
+        prompt = f"""{system_prompt}
 
 ## Context: Applicable Rules
 
@@ -78,6 +88,8 @@ If no issues are found, return an empty array: []
 Review the code changes above and identify any violations of the provided rules.
 Return your findings as a JSON array following the specified format.
 """
+        
+        logger.info(f"Generated Prompt:\n{prompt}")
         
         return prompt
     
@@ -158,4 +170,6 @@ Return your findings as a JSON array following the specified format.
         Returns:
             Prompt string
         """
-        return f"{self.SYSTEM_PROMPT}\n\n{question}"
+        current_date_str = datetime.date.today().strftime("%Y-%m-%d")
+        system_prompt = self.SYSTEM_PROMPT_TEMPLATE.format(current_date=current_date_str)
+        return f"{system_prompt}\n\n{question}"
