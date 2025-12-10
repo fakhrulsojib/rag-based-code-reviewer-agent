@@ -23,6 +23,17 @@ services:
       timeout: 10s
       retries: 3
 
+  frontend:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    container_name: review-ui
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+    depends_on:
+      - review-agent
+
 volumes:
   vector_store:
   logs:

@@ -146,3 +146,29 @@ class ReviewReporter:
         data = [finding.dict() for finding in findings]
         with open(file_path, 'w') as f:
             json.dump(data, f, indent=2, default=str)
+
+    def save_possible_comments(self, report_dir: str, chunk_id: int, findings: List[Finding]):
+        """Save potential comments for manual review.
+        
+        Args:
+            report_dir: Report directory path
+            chunk_id: Chunk index
+            findings: List of Finding objects (verified)
+        """
+        path = self._get_chunk_dir(report_dir, chunk_id)
+        file_path = os.path.join(path, "possible_comments.json")
+        
+        data = [finding.dict() for finding in findings]
+        with open(file_path, 'w') as f:
+            json.dump(data, f, indent=2, default=str)
+
+    def save_status(self, report_dir: str, status_data: Dict[str, Any]):
+        """Save status of the review process.
+        
+        Args:
+            report_dir: Report directory path
+            status_data: Dictionary containing status info
+        """
+        file_path = os.path.join(report_dir, "status.json")
+        with open(file_path, 'w') as f:
+            json.dump(status_data, f, indent=2, default=str)

@@ -1,5 +1,6 @@
 """LangGraph workflow for code review orchestration."""
 import asyncio
+import os
 from typing import TypedDict, List, Annotated
 from langgraph.graph import StateGraph, END
 from src.models import FileDiff, Anchor, RuleChunk, Finding
@@ -30,6 +31,7 @@ class ReviewState(TypedDict):
     findings: List[Finding]
     status: str
     error: str
+    report_dir: str
 
 
 class ReviewWorkflow:
@@ -297,11 +299,11 @@ class ReviewWorkflow:
         logger.info("Posting comments")
         
         try:
-            if state['findings']:
-                await self.comment_poster.post_findings(
-                    pr_id=state['pr_id'],
-                    findings=state['findings']
-                )
+            # if state['findings']:
+            #     # await self.comment_poster.post_findings(
+            #     #     pr_id=state['pr_id'],
+            #     #     findings=state['findings']
+            #     # )
             
             state['status'] = 'complete'
         except Exception as e:
@@ -311,11 +313,12 @@ class ReviewWorkflow:
         
         return state
     
-    async def run(self, pr_id: int) -> ReviewState:
+    async def run(self, pr_id: int, report_dir: str = None) -> ReviewState:
         """Run the complete review workflow with partitioning.
         
         Args:
             pr_id: Pull request ID
+            report_dir: Optional pre-created report directory
             
         Returns:
             Final workflow state (aggregated)
@@ -333,7 +336,8 @@ class ReviewWorkflow:
             'llm_response': '',
             'findings': [],
             'status': 'started',
-            'error': ''
+            'error': '',
+            'report_dir': ''
         }
         
         try:
@@ -346,8 +350,24 @@ class ReviewWorkflow:
             # 2. Partition Diff
             chunks = self.partitioner.partition_diffs(file_diffs)
             
-            # 3. Create Report Directory
-            report_dir = self.reporter.create_report_dir(pr_id)
+            # 3. Create Report Directory (if not provided)
+            if not report_dir:
+                report_dir_path = self.reporter.create_report_dir(pr_id)
+                report_dir = os.path.basename(report_dir_path)
+            else:
+                report_dir_path = os.path.join(self.reporter.base_dir, report_dir)
+                
+            final_state['report_dir'] = report_dir
+            
+            # Save initial status
+            self.reporter.save_status(report_dir_path, {
+                "status": "in_progress",
+                "pr_id": pr_id,
+                "total_chunks": len(chunks),
+                "completed_chunks": 0,
+                "current_chunk": 0,
+                "start_time": time.time()
+            })
             
             all_findings = []
             
@@ -386,7 +406,7 @@ class ReviewWorkflow:
                     result_state.get('llm_response', ''),
                     result_state.get('findings', [])
                 )
-                self.reporter.save_comments(report_dir, i, result_state.get('findings', []))
+                self.reporter.save_possible_comments(report_dir, i, result_state.get('findings', []))
                 
                 if result_state.get('error'):
                     logger.error(f"Error processing chunk {i}: {result_state['error']}")
@@ -394,13 +414,42 @@ class ReviewWorkflow:
                 
                 if result_state.get('findings'):
                     all_findings.extend(result_state['findings'])
+
+                # Update status
+                self.reporter.save_status(report_dir_path, {
+                    "status": "in_progress",
+                    "pr_id": pr_id,
+                    "total_chunks": len(chunks),
+                    "completed_chunks": i + 1,
+                    "current_chunk": i + 1,
+                    "last_updated": time.time()
+                })
             
             final_state['findings'] = all_findings
             final_state['status'] = 'complete' if not final_state['error'] else 'partial_error'
+            
+            # Save final status
+            self.reporter.save_status(report_dir_path, {
+                "status": final_state['status'],
+                "pr_id": pr_id,
+                "total_chunks": len(chunks),
+                "completed_chunks": len(chunks),
+                "end_time": time.time(),
+                "error": final_state['error']
+            })
             
         except Exception as e:
             logger.error(f"Workflow execution failed: {e}")
             final_state['error'] = str(e)
             final_state['status'] = 'error'
+            
+            # Save error status
+            if 'report_dir_path' in locals():
+                self.reporter.save_status(report_dir_path, {
+                    "status": "error",
+                    "pr_id": pr_id,
+                    "error": str(e),
+                    "end_time": time.time()
+                })
         
         return final_state

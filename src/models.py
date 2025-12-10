@@ -156,6 +156,7 @@ class ReviewResponse(BaseModel):
     findings_count: int = Field(default=0, ge=0, description="Number of findings")
     findings: List[Finding] = Field(default_factory=list, description="List of findings")
     message: str = Field(description="Status message")
+    report_dir: Optional[str] = Field(default=None, description="Directory name of the generated report")
     processing_time: float = Field(default=0.0, ge=0.0, description="Processing time in seconds")
     
     class Config:
